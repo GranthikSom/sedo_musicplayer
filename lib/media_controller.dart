@@ -39,11 +39,12 @@ class MediaController {
     }
   }
 
-  /// Fetches Now Playing metadata from MPNowPlayingInfoCenter.
+  /// Fetches Now Playing metadata from the system.
   ///
   /// Returns a map with:
-  ///   - "title"  : track title (or "Unknown")
-  ///   - "artist" : artist name (or "Unknown")
+  ///   - "title"   : track title (or "Unknown")
+  ///   - "artist"  : artist name (or "Unknown")
+  ///   - "artwork" : base64-encoded image data (or empty string)
   ///
   /// Never throws — returns a safe fallback map on any error.
   Future<Map<String, dynamic>> nowPlaying() async {
@@ -54,6 +55,7 @@ class MediaController {
       return {
         'title': (result['title'] as String?) ?? 'Unknown',
         'artist': (result['artist'] as String?) ?? 'Unknown',
+        'artwork': (result['artwork'] as String?) ?? '',
       };
     } on PlatformException catch (e) {
       _log('nowPlaying failed: ${e.message}');
@@ -64,7 +66,8 @@ class MediaController {
     }
   }
 
-  Map<String, dynamic> _unknown() => {'title': 'Unknown', 'artist': 'Unknown'};
+  Map<String, dynamic> _unknown() =>
+      {'title': 'Unknown', 'artist': 'Unknown', 'artwork': ''};
 
   void _log(String msg) {
     // ignore: avoid_print

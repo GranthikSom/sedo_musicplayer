@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sedo_music_bridge/media_controller.dart';
@@ -59,6 +61,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
 
   String _title = '—';
   String _artist = '—';
+  String _artworkBase64 = '';
   bool _isPlaying = false;
   bool _loading = true;
 
@@ -101,8 +104,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
     setState(() {
       _title = info['title'] ?? '—';
       _artist = info['artist'] ?? '—';
+      _artworkBase64 = info['artwork'] ?? '';
       _loading = false;
-      // Heuristic: if title changed from unknown we likely have an active session.
       _isPlaying = _title != 'Unknown' && _title != '—';
     });
   }
@@ -253,7 +256,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           SizedBox(height: 20),
-          _AlbumArtPlaceholder(isPlaying: _isPlaying, size: size.width * 0.58),
+          _AlbumArt(
+              isPlaying: _isPlaying,
+              size: size.width * 0.58,
+              artworkBase64: _artworkBase64),
           const SizedBox(height: 32),
           _TrackMetadata(title: _title, artist: _artist),
           const SizedBox(height: 40),
@@ -285,17 +291,28 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Album Art Placeholder
+// Album Art
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _AlbumArtPlaceholder extends StatelessWidget {
+class _AlbumArt extends StatelessWidget {
   final bool isPlaying;
   final double size;
+  final String artworkBase64;
 
-  const _AlbumArtPlaceholder({required this.isPlaying, required this.size});
+  const _AlbumArt({
+    required this.isPlaying,
+    required this.size,
+    required this.artworkBase64,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final hasArtwork = artworkBase64.isNotEmpty;
+    Uint8List? imageBytes;
+    if (hasArtwork) {
+      imageBytes = base64Decode(artworkBase64);
+    }
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 500),
       curve: Curves.easeOutCubic,
@@ -318,13 +335,20 @@ class _AlbumArtPlaceholder extends StatelessWidget {
               ]
             : [],
       ),
-      child: Center(
-        child: Icon(
-          Icons.music_note_rounded,
-          color: isPlaying ? const Color(0xFF333333) : const Color(0xFF222222),
-          size: size * 0.3,
-        ),
-      ),
+      child: hasArtwork && imageBytes != null
+          ? ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.memory(imageBytes, fit: BoxFit.cover),
+            )
+          : Center(
+              child: Icon(
+                Icons.music_note_rounded,
+                color: isPlaying
+                    ? const Color(0xFF333333)
+                    : const Color(0xFF222222),
+                size: size * 0.3,
+              ),
+            ),
     );
   }
 }

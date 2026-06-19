@@ -60,32 +60,47 @@ private let mediaRemoteSendCommand: MRSendCommandFunc? = {
 
     // ── Playback Controls ──────────────────────────────────────────────────
 
-    /// Sends play or pause based on the current UI state from Dart.
-    /// [isPlaying] tells us whether the system APPEARS to be playing,
-    /// so we send pause (1) if playing, play (0) if paused.
     private func handlePlayPause(isPlaying: Bool, result: @escaping FlutterResult) {
+        let target: UInt32 = isPlaying ? 1 : 0 // 1=pause, 0=play
+
+        // Primary: MRMediaRemoteSendCommand targets the active audio session
         if let send = mediaRemoteSendCommand {
-            send(isPlaying ? 1 : 0, nil) // 1=pause, 0=play
-            result(nil)
-        } else {
-            fallbackTogglePlayPause(result: result)
+            send(target, nil)
         }
+
+        // Secondary: MPRemoteCommandCenter as fallback
+        let center = MPRemoteCommandCenter.shared()
+        let cmd = isPlaying ? center.pauseCommand : center.playCommand
+        let sel = NSSelectorFromString("sendRemoteCommandEvent:")
+        if cmd.responds(to: sel),
+           let cls = NSClassFromString("MPRemoteCommandEvent") as? NSObject.Type {
+            let event = cls.init()
+            _ = cmd.perform(sel, with: event)
+        }
+
+        result(nil)
     }
 
     private func handleNext(result: @escaping FlutterResult) {
-        if let send = mediaRemoteSendCommand {
-            send(4, nil)
-        } else {
-            fallbackSendCommand(4)
+        if let send = mediaRemoteSendCommand { send(4, nil) }
+        let sel = NSSelectorFromString("sendRemoteCommandEvent:")
+        let cmd = MPRemoteCommandCenter.shared().nextTrackCommand
+        if cmd.responds(to: sel),
+           let cls = NSClassFromString("MPRemoteCommandEvent") as? NSObject.Type {
+            let event = cls.init()
+            _ = cmd.perform(sel, with: event)
         }
         result(nil)
     }
 
     private func handlePrevious(result: @escaping FlutterResult) {
-        if let send = mediaRemoteSendCommand {
-            send(5, nil)
-        } else {
-            fallbackSendCommand(5)
+        if let send = mediaRemoteSendCommand { send(5, nil) }
+        let sel = NSSelectorFromString("sendRemoteCommandEvent:")
+        let cmd = MPRemoteCommandCenter.shared().previousTrackCommand
+        if cmd.responds(to: sel),
+           let cls = NSClassFromString("MPRemoteCommandEvent") as? NSObject.Type {
+            let event = cls.init()
+            _ = cmd.perform(sel, with: event)
         }
         result(nil)
     }
@@ -94,75 +109,71 @@ private let mediaRemoteSendCommand: MRSendCommandFunc? = {
 
     private func handleNowPlaying(result: @escaping FlutterResult) {
         guard let getInfo = mediaRemoteGetNowPlaying else {
-            completeNowPlaying(result: result, title: "Unknown", artist: "Unknown")
+            result(["title": "Unknown", "artist": "Unknown", "artwork": ""])
             return
         }
 
-        // Async: callback fires on .main when data is ready.
-        // No semaphore needed — Flutter's result can be called later.
         getInfo(.main) { dict in
-            let ns = dict as NSDictionary?
-            let mrTitle  = ns?["kMRMediaRemoteNowPlayingInfoTitle"]  as? String
-                        ?? ns?["__kMRMediaRemoteNowPlayingInfoTitle"] as? String
-                        ?? "Unknown"
-            let mrArtist = ns?["kMRMediaRemoteNowPlayingInfoArtist"]  as? String
-                        ?? ns?["__kMRMediaRemoteNowPlayingInfoArtist"] as? String
-                        ?? "Unknown"
-
-            // If MediaRemote returned real data, use it directly
-            if mrTitle != "Unknown" || mrArtist != "Unknown" {
-                result(["title": mrTitle, "artist": mrArtist])
+            guard let ns = dict as NSDictionary?, ns.count > 0 else {
+                // No data from MediaRemote — return Unknown (don't use
+                // MPMusicPlayerController which returns stale Apple Music data)
+                result(["title": "Unknown", "artist": "Unknown", "artwork": ""])
                 return
             }
 
-            // Fallback chaining
-            self.completeNowPlaying(result: result, title: mrTitle, artist: mrArtist)
-        }
-    }
+            let allKeys = ns.allKeys.compactMap { $0 as? String }
 
-    /// Chains fallbacks: MPMusicPlayerController → MPNowPlayingInfoCenter
-    private func completeNowPlaying(result: FlutterResult, title: String, artist: String) {
-        var t = title, a = artist
-
-        // MPMusicPlayerController (Apple Music)
-        if t == "Unknown" || a == "Unknown" {
-            let player = MPMusicPlayerController.systemMusicPlayer
-            if let item = player.nowPlayingItem {
-                if t == "Unknown" { t = item.title ?? "Unknown" }
-                if a == "Unknown" { a = item.artist ?? "Unknown" }
+            // Extract title — try known keys, then search dynamically
+            var title: String? = ns["kMRMediaRemoteNowPlayingInfoTitle"] as? String
+                              ?? ns["__kMRMediaRemoteNowPlayingInfoTitle"] as? String
+            if title == nil {
+                for k in allKeys {
+                    let kl = k.lowercased()
+                    if kl.contains("title") || kl.contains("song") || kl.contains("track") {
+                        title = ns[k] as? String
+                        if title != nil { break }
+                    }
+                }
             }
-        }
 
-        // MPNowPlayingInfoCenter (this app only — rarely useful)
-        if t == "Unknown" || a == "Unknown" {
-            let info = MPNowPlayingInfoCenter.default().nowPlayingInfo
-            if t == "Unknown" { t = info?[MPMediaItemPropertyTitle] as? String ?? "Unknown" }
-            if a == "Unknown" { a = info?[MPMediaItemPropertyArtist] as? String ?? "Unknown" }
-        }
+            // Extract artist
+            var artist: String? = ns["kMRMediaRemoteNowPlayingInfoArtist"] as? String
+                               ?? ns["__kMRMediaRemoteNowPlayingInfoArtist"] as? String
+            if artist == nil {
+                for k in allKeys {
+                    if k.lowercased().contains("artist") {
+                        artist = ns[k] as? String
+                        if artist != nil { break }
+                    }
+                }
+            }
 
-        result(["title": t, "artist": a])
-    }
+            // Extract artwork as base64
+            var b64Artwork = ""
+            if let data = (
+                ns["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data ??
+                ns["__kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data
+            ) {
+                b64Artwork = data.base64EncodedString()
+            }
+            // Artwork might also come as a dict with "data" key
+            if b64Artwork.isEmpty {
+                for k in allKeys {
+                    if k.lowercased().contains("artwork") || k.lowercased().contains("album") {
+                        if let imgDict = ns[k] as? [String: Any],
+                           let imgData = imgDict["data"] as? Data {
+                            b64Artwork = imgData.base64EncodedString()
+                            break
+                        }
+                    }
+                }
+            }
 
-    // ── Fallbacks ─────────────────────────────────────────────────────────
-
-    private func fallbackTogglePlayPause(result: FlutterResult) {
-        let sel = NSSelectorFromString("sendRemoteCommandEvent:")
-        let center = MPRemoteCommandCenter.shared()
-        if center.playCommand.responds(to: sel),
-           let cls = NSClassFromString("MPRemoteCommandEvent") as? NSObject.Type {
-            let event = cls.init()
-            _ = center.playCommand.perform(sel, with: event)
-        } else {
-            MPMusicPlayerController.systemMusicPlayer.play()
-        }
-        result(nil)
-    }
-
-    private func fallbackSendCommand(_ cmd: UInt32) {
-        if cmd == 4 {
-            MPMusicPlayerController.systemMusicPlayer.skipToNextItem()
-        } else {
-            MPMusicPlayerController.systemMusicPlayer.skipToPreviousItem()
+            result([
+                "title":   title   ?? "Unknown",
+                "artist":  artist  ?? "Unknown",
+                "artwork": b64Artwork,
+            ])
         }
     }
 }
