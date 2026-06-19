@@ -2,30 +2,63 @@ import UIKit
 import Flutter
 import MediaPlayer
 
-// ── MediaRemote private API ──────────────────────────────────────────────
-
-private let mediaRemoteHandle: UnsafeMutableRawPointer? = {
-    dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY)
-}()
-
-private typealias MRGetNowPlayingFunc = @convention(c) (DispatchQueue, @escaping (CFDictionary?) -> Void) -> Void
-private let mediaRemoteGetNowPlaying: MRGetNowPlayingFunc? = {
-    guard let h = mediaRemoteHandle, let s = dlsym(h, "MRMediaRemoteGetNowPlayingInfo") else { return nil }
-    return unsafeBitCast(s, to: MRGetNowPlayingFunc.self)
-}()
-
-private typealias MRSendCommandFunc = @convention(c) (UInt32, CFDictionary?) -> Void
-private let mediaRemoteSendCommand: MRSendCommandFunc? = {
-    guard let h = mediaRemoteHandle, let s = dlsym(h, "MRMediaRemoteSendCommand") else { return nil }
-    return unsafeBitCast(s, to: MRSendCommandFunc.self)
-}()
-
-// ─────────────────────────────────────────────────────────────────────────
+private let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
 
     private let channelName = "music/bridge"
+
+    // ── Private MediaRemote API (loaded via dlsym) ──────────────────────────
+
+    private typealias MRMediaRemoteSendCommandFn =
+        @convention(c) (Int, CFDictionary?) -> Void
+    private typealias MRMediaRemoteSendCommandWithResultFn =
+        @convention(c) (Int, CFDictionary?, (@convention(block) (UInt32) -> Void)?) -> Void
+    private typealias MRMediaRemoteGetNowPlayingInfoFn =
+        @convention(c) (DispatchQueue, @escaping (CFDictionary?) -> Void) -> Void
+    private typealias MRMediaRemoteGetNowPlayingApplicationDisplayIDFn =
+        @convention(c) () -> CFString?
+
+    private struct MediaRemote {
+        let send: MRMediaRemoteSendCommandFn
+        let sendWithResult: MRMediaRemoteSendCommandWithResultFn
+        let getNowPlaying: MRMediaRemoteGetNowPlayingInfoFn
+        let getAppDisplayID: MRMediaRemoteGetNowPlayingApplicationDisplayIDFn
+    }
+
+    private lazy var mr: MediaRemote? = {
+        // Try RTLD_DEFAULT first — MediaRemote is loaded into every process
+        let find: (String) -> UnsafeMutableRawPointer? = { name in
+            if let s = dlsym(RTLD_DEFAULT, name) { return s }
+            let path = "/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote"
+            if let h = dlopen(path, RTLD_NOW | RTLD_NOLOAD), let s = dlsym(h, name) { return s }
+            if let h = dlopen(path, RTLD_NOW),           let s = dlsym(h, name) { return s }
+            return nil
+        }
+        guard
+            let s = find("MRMediaRemoteSendCommand"),
+            let r = find("MRMediaRemoteSendCommandWithResult"),
+            let g = find("MRMediaRemoteGetNowPlayingInfo"),
+            let a = find("MRMediaRemoteGetNowPlayingApplicationDisplayID")
+        else {
+            NSLog("[Sedo] FAILED to load MediaRemote symbols:")
+            if dlsym(RTLD_DEFAULT, "MRMediaRemoteSendCommand") == nil { NSLog("[Sedo]   MRMediaRemoteSendCommand — MISSING") }
+            if dlsym(RTLD_DEFAULT, "MRMediaRemoteSendCommandWithResult") == nil { NSLog("[Sedo]   MRMediaRemoteSendCommandWithResult — MISSING") }
+            if dlsym(RTLD_DEFAULT, "MRMediaRemoteGetNowPlayingInfo") == nil { NSLog("[Sedo]   MRMediaRemoteGetNowPlayingInfo — MISSING") }
+            if dlsym(RTLD_DEFAULT, "MRMediaRemoteGetNowPlayingApplicationDisplayID") == nil { NSLog("[Sedo]   MRMediaRemoteGetNowPlayingApplicationDisplayID — MISSING") }
+            return nil
+        }
+        NSLog("[Sedo] MediaRemote APIs loaded via RTLD_DEFAULT")
+        return MediaRemote(
+            send:           unsafeBitCast(s, to: MRMediaRemoteSendCommandFn.self),
+            sendWithResult: unsafeBitCast(r, to: MRMediaRemoteSendCommandWithResultFn.self),
+            getNowPlaying:  unsafeBitCast(g, to: MRMediaRemoteGetNowPlayingInfoFn.self),
+            getAppDisplayID: unsafeBitCast(a, to: MRMediaRemoteGetNowPlayingApplicationDisplayIDFn.self)
+        )
+    }()
+
+    // ── App Launch ──────────────────────────────────────────────────────────
 
     override func application(
         _ application: UIApplication,
@@ -33,7 +66,7 @@ private let mediaRemoteSendCommand: MRSendCommandFunc? = {
     ) -> Bool {
 
         guard let controller = window?.rootViewController as? FlutterViewController else {
-            fatalError("[SedoBridge] rootViewController is not a FlutterViewController")
+            fatalError("[Sedo] rootViewController is not FlutterViewController")
         }
 
         let channel = FlutterMethodChannel(
@@ -44,13 +77,11 @@ private let mediaRemoteSendCommand: MRSendCommandFunc? = {
         channel.setMethodCallHandler { [weak self] (call, result) in
             guard let self = self else { return }
             switch call.method {
-            case "playPause":
-                let isPlaying = (call.arguments as? Bool) ?? false
-                self.handlePlayPause(isPlaying: isPlaying, result: result)
-            case "next":        self.handleNext(result: result)
-            case "previous":    self.handlePrevious(result: result)
-            case "nowPlaying":  self.handleNowPlaying(result: result)
-            default:            result(FlutterMethodNotImplemented)
+            case "playPause":  self.handlePlayPause(result: result)
+            case "next":       self.handleNext(result: result)
+            case "previous":   self.handlePrevious(result: result)
+            case "nowPlaying": self.handleNowPlaying(result: result)
+            default:           result(FlutterMethodNotImplemented)
             }
         }
 
@@ -58,121 +89,117 @@ private let mediaRemoteSendCommand: MRSendCommandFunc? = {
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // ── Playback Controls ──────────────────────────────────────────────────
+    // ── Playback Controls ───────────────────────────────────────────────────
 
-    private func handlePlayPause(isPlaying: Bool, result: @escaping FlutterResult) {
-        let target: UInt32 = isPlaying ? 1 : 0 // 1=pause, 0=play
-
-        // Primary: MRMediaRemoteSendCommand targets the active audio session
-        if let send = mediaRemoteSendCommand {
-            send(target, nil)
+    private func handlePlayPause(result: @escaping FlutterResult) {
+        guard let mr = mr else {
+            NSLog("[Sedo] playPause — mr is nil, using fallback")
+            fallbackPlayPause()
+            result(nil)
+            return
         }
-
-        // Secondary: MPRemoteCommandCenter as fallback
-        let center = MPRemoteCommandCenter.shared()
-        let cmd = isPlaying ? center.pauseCommand : center.playCommand
-        let sel = NSSelectorFromString("sendRemoteCommandEvent:")
-        if cmd.responds(to: sel),
-           let cls = NSClassFromString("MPRemoteCommandEvent") as? NSObject.Type {
-            let event = cls.init()
-            _ = cmd.perform(sel, with: event)
+        // Send toggle + play + pause (+ sendWithResult for status)
+        mr.sendWithResult(2, nil) { s in
+            NSLog("[Sedo] togglePlayPause → status=\(s)")
         }
-
+        mr.send(0, nil)
+        mr.send(1, nil)
         result(nil)
     }
 
     private func handleNext(result: @escaping FlutterResult) {
-        if let send = mediaRemoteSendCommand { send(4, nil) }
-        let sel = NSSelectorFromString("sendRemoteCommandEvent:")
-        let cmd = MPRemoteCommandCenter.shared().nextTrackCommand
-        if cmd.responds(to: sel),
-           let cls = NSClassFromString("MPRemoteCommandEvent") as? NSObject.Type {
-            let event = cls.init()
-            _ = cmd.perform(sel, with: event)
-        }
+        guard let mr = mr else { NSLog("[Sedo] next — mr nil"); result(nil); return }
+        mr.sendWithResult(4, nil) { s in NSLog("[Sedo] nextTrack → status=\(s)") }
         result(nil)
     }
 
     private func handlePrevious(result: @escaping FlutterResult) {
-        if let send = mediaRemoteSendCommand { send(5, nil) }
-        let sel = NSSelectorFromString("sendRemoteCommandEvent:")
-        let cmd = MPRemoteCommandCenter.shared().previousTrackCommand
-        if cmd.responds(to: sel),
-           let cls = NSClassFromString("MPRemoteCommandEvent") as? NSObject.Type {
-            let event = cls.init()
-            _ = cmd.perform(sel, with: event)
-        }
+        guard let mr = mr else { NSLog("[Sedo] prev — mr nil"); result(nil); return }
+        mr.sendWithResult(5, nil) { s in NSLog("[Sedo] prevTrack → status=\(s)") }
         result(nil)
     }
 
-    // ── Now Playing Metadata ──────────────────────────────────────────────
+    private func fallbackPlayPause() {
+        let p = MPMusicPlayerController.systemMusicPlayer
+        if #available(iOS 16, *) {
+            switch p.playbackState {
+            case .playing: p.pause()
+            default:       p.play()
+            }
+        }
+    }
+
+    // ── Now Playing Metadata ───────────────────────────────────────────────
 
     private func handleNowPlaying(result: @escaping FlutterResult) {
-        guard let getInfo = mediaRemoteGetNowPlaying else {
-            result(["title": "Unknown", "artist": "Unknown", "artwork": ""])
+        guard let mr = mr else {
+            NSLog("[Sedo] nowPlaying — mr is nil, using fallback")
+            fallbackNP(result: result)
             return
         }
 
-        getInfo(.main) { dict in
-            guard let ns = dict as NSDictionary?, ns.count > 0 else {
-                // No data from MediaRemote — return Unknown (don't use
-                // MPMusicPlayerController which returns stale Apple Music data)
-                result(["title": "Unknown", "artist": "Unknown", "artwork": ""])
+        // Log which app the system thinks is the now-playing app
+        let appID = mr.getAppDisplayID()
+        NSLog("[Sedo] NowPlaying app: \(appID ?? "nil" as CFString)")
+
+        // Fetch system-wide now playing info via private API
+        mr.getNowPlaying(DispatchQueue.main) { [weak self] cf in
+            guard let self = self else { return }
+
+            guard let dict = cf as? [String: Any] else {
+                NSLog("[Sedo] MRMediaRemoteGetNowPlayingInfo returned nil/empty")
+                self.fallbackNP(result: result)
                 return
             }
 
-            let allKeys = ns.allKeys.compactMap { $0 as? String }
+            let nd = dict as NSDictionary
+            if !self.didLogNPKeys {
+                NSLog("[Sedo] --- NowPlaying dictionary has \(nd.allKeys.count) keys ---")
+                for k in nd.allKeys {
+                    NSLog("[Sedo]   NP key: \(k) = \(nd[k] ?? "nil")")
+                }
+                self.didLogNPKeys = true
+            }
 
-            // Extract title — try known keys, then search dynamically
-            var title: String? = ns["kMRMediaRemoteNowPlayingInfoTitle"] as? String
-                              ?? ns["__kMRMediaRemoteNowPlayingInfoTitle"] as? String
-            if title == nil {
-                for k in allKeys {
-                    let kl = k.lowercased()
-                    if kl.contains("title") || kl.contains("song") || kl.contains("track") {
-                        title = ns[k] as? String
-                        if title != nil { break }
-                    }
+            let title  = self.scanNP(nd, ["title","Title","kMRMediaRemoteNowPlayingInfoTitle"])
+                      ?? self.str(dict[MPMediaItemPropertyTitle]) ?? "Unknown"
+            let artist = self.scanNP(nd, ["artist","Artist","kMRMediaRemoteNowPlayingInfoArtist"])
+                      ?? self.str(dict[MPMediaItemPropertyArtist]) ?? "Unknown"
+
+            NSLog("[Sedo] NP result: '\(title)' – '\(artist)'")
+            result(["title": title, "artist": artist])
+        }
+    }
+
+    private var didLogNPKeys = false
+
+    private func scanNP(_ d: NSDictionary, _ keys: [String]) -> String? {
+        for k in keys {
+            if let v = d[k] as? String, !v.isEmpty { return v }
+        }
+        for k in d.allKeys {
+            guard let ks = k as? String else { continue }
+            for s in keys {
+                if ks.lowercased().contains(s.lowercased()) {
+                    return d[k] as? String
                 }
             }
+        }
+        return nil
+    }
 
-            // Extract artist
-            var artist: String? = ns["kMRMediaRemoteNowPlayingInfoArtist"] as? String
-                               ?? ns["__kMRMediaRemoteNowPlayingInfoArtist"] as? String
-            if artist == nil {
-                for k in allKeys {
-                    if k.lowercased().contains("artist") {
-                        artist = ns[k] as? String
-                        if artist != nil { break }
-                    }
-                }
-            }
+    private func str(_ v: Any?) -> String? {
+        (v as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
 
-            // Extract artwork as base64
-            var b64Artwork = ""
-            if let data = (
-                ns["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data ??
-                ns["__kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data
-            ) {
-                b64Artwork = data.base64EncodedString()
-            }
-            // Artwork might also come as a dict with "data" key
-            if b64Artwork.isEmpty {
-                for k in allKeys {
-                    if k.lowercased().contains("artwork") || k.lowercased().contains("album") {
-                        if let imgDict = ns[k] as? [String: Any],
-                           let imgData = imgDict["data"] as? Data {
-                            b64Artwork = imgData.base64EncodedString()
-                            break
-                        }
-                    }
-                }
-            }
-
+    private func fallbackNP(result: @escaping FlutterResult) {
+        if let item = MPMusicPlayerController.systemMusicPlayer.nowPlayingItem {
+            result(["title": item.title ?? "Unknown", "artist": item.artist ?? "Unknown"])
+        } else {
+            let info = MPNowPlayingInfoCenter.default().nowPlayingInfo
             result([
-                "title":   title   ?? "Unknown",
-                "artist":  artist  ?? "Unknown",
-                "artwork": b64Artwork,
+                "title":  info?[MPMediaItemPropertyTitle]  as? String ?? "Unknown",
+                "artist": info?[MPMediaItemPropertyArtist] as? String ?? "Unknown",
             ])
         }
     }

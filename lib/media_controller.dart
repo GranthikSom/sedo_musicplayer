@@ -6,10 +6,9 @@ class MediaController {
   static const MethodChannel _channel = MethodChannel('music/bridge');
 
   /// Toggles system play/pause for the active audio session.
-  /// [isCurrentlyPlaying] tells the native side whether to send play or pause.
-  Future<void> playPause({required bool isCurrentlyPlaying}) async {
+  Future<void> playPause() async {
     try {
-      await _channel.invokeMethod('playPause', isCurrentlyPlaying);
+      await _channel.invokeMethod('playPause');
     } on PlatformException catch (e) {
       _log('playPause failed: ${e.message}');
     } on MissingPluginException catch (e) {
@@ -42,9 +41,8 @@ class MediaController {
   /// Fetches Now Playing metadata from the system.
   ///
   /// Returns a map with:
-  ///   - "title"   : track title (or "Unknown")
-  ///   - "artist"  : artist name (or "Unknown")
-  ///   - "artwork" : base64-encoded image data (or empty string)
+  ///   - "title"  : track title (or "Unknown")
+  ///   - "artist" : artist name (or "Unknown")
   ///
   /// Never throws — returns a safe fallback map on any error.
   Future<Map<String, dynamic>> nowPlaying() async {
@@ -55,7 +53,6 @@ class MediaController {
       return {
         'title': (result['title'] as String?) ?? 'Unknown',
         'artist': (result['artist'] as String?) ?? 'Unknown',
-        'artwork': (result['artwork'] as String?) ?? '',
       };
     } on PlatformException catch (e) {
       _log('nowPlaying failed: ${e.message}');
@@ -66,8 +63,7 @@ class MediaController {
     }
   }
 
-  Map<String, dynamic> _unknown() =>
-      {'title': 'Unknown', 'artist': 'Unknown', 'artwork': ''};
+  Map<String, dynamic> _unknown() => {'title': 'Unknown', 'artist': 'Unknown'};
 
   void _log(String msg) {
     // ignore: avoid_print

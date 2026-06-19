@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sedo_music_bridge/media_controller.dart';
@@ -112,7 +110,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
 
   Future<void> _handlePlayPause() async {
     HapticFeedback.mediumImpact();
-    await _controller.playPause(isCurrentlyPlaying: _isPlaying);
+    await _controller.playPause();
     setState(() => _isPlaying = !_isPlaying);
     await Future.delayed(const Duration(milliseconds: 300));
     await _fetchNowPlaying();
@@ -256,10 +254,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           SizedBox(height: 20),
-          _AlbumArt(
-              isPlaying: _isPlaying,
-              size: size.width * 0.58,
-              artworkBase64: _artworkBase64),
+          _AlbumArtPlaceholder(isPlaying: _isPlaying, size: size.width * 0.58),
           const SizedBox(height: 32),
           _TrackMetadata(title: _title, artist: _artist),
           const SizedBox(height: 40),
@@ -291,28 +286,17 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Album Art
+// Album Art Placeholder
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _AlbumArt extends StatelessWidget {
+class _AlbumArtPlaceholder extends StatelessWidget {
   final bool isPlaying;
   final double size;
-  final String artworkBase64;
 
-  const _AlbumArt({
-    required this.isPlaying,
-    required this.size,
-    required this.artworkBase64,
-  });
+  const _AlbumArtPlaceholder({required this.isPlaying, required this.size});
 
   @override
   Widget build(BuildContext context) {
-    final hasArtwork = artworkBase64.isNotEmpty;
-    Uint8List? imageBytes;
-    if (hasArtwork) {
-      imageBytes = base64Decode(artworkBase64);
-    }
-
     return AnimatedContainer(
       duration: const Duration(milliseconds: 500),
       curve: Curves.easeOutCubic,
@@ -335,20 +319,13 @@ class _AlbumArt extends StatelessWidget {
               ]
             : [],
       ),
-      child: hasArtwork && imageBytes != null
-          ? ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Image.memory(imageBytes, fit: BoxFit.cover),
-            )
-          : Center(
-              child: Icon(
-                Icons.music_note_rounded,
-                color: isPlaying
-                    ? const Color(0xFF333333)
-                    : const Color(0xFF222222),
-                size: size * 0.3,
-              ),
-            ),
+      child: Center(
+        child: Icon(
+          Icons.music_note_rounded,
+          color: isPlaying ? const Color(0xFF333333) : const Color(0xFF222222),
+          size: size * 0.3,
+        ),
+      ),
     );
   }
 }
