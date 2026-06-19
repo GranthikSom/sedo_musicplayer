@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist — Sedo Music Bridge
+
+  Key permissions required:
+  ─────────────────────────────────────────────────────────────────────────────
+  NSAppleMusicUsageDescription
+    Needed so MPMusicPlayerController can read the system Now Playing session
+    and send skip/play/pause commands to Apple Music. iOS 13+ displays this
+    when the app first accesses music library/playback metadata.
+
+  UIBackgroundModes → audio
+    Without this key, iOS suspends the app when it goes to background,
+    which would stop the 2.5-second polling timer. Adding "audio" as a
+    background mode keeps timers alive. NOTE: We do NOT set
+    AVAudioSession.Category — we never play audio.
+  ─────────────────────────────────────────────────────────────────────────────
+-->
+<plist version="1.0">
+<dict>
+  <!-- ── App Identity ──────────────────────────────────────────────────────── -->
+  <key>CFBundleDevelopmentRegion</key>
+  <string>$(DEVELOPMENT_LANGUAGE)</string>
+
+  <key>CFBundleDisplayName</key>
+  <string>Sedo Bridge</string>
+
+  <key>CFBundleExecutable</key>
+  <string>$(EXECUTABLE_NAME)</string>
+
+  <key>CFBundleIdentifier</key>
+  <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+
+  <key>CFBundleName</key>
+  <string>sedo_music_bridge</string>
+
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+
+  <key>CFBundleShortVersionString</key>
+  <string>$(FLUTTER_BUILD_NAME)</string>
+
+  <key>CFBundleSignature</key>
+  <string>????</string>
+
+  <key>CFBundleVersion</key>
+  <string>$(FLUTTER_BUILD_NUMBER)</string>
+
+  <!-- ── Required Device Capabilities ─────────────────────────────────────── -->
+  <key>UIRequiredDeviceCapabilities</key>
+  <array>
+    <string>arm64</string>
+  </array>
+
+  <!-- ── Supported Interface Orientations ──────────────────────────────────── -->
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+  </array>
+
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+
+  <!-- ── Main Interface ─────────────────────────────────────────────────────── -->
+  <key>UIMainStoryboardFile</key>
+  <string>Main</string>
+
+  <key>NSPrincipalClass</key>
+  <string>FlutterApplication</string>
+
+  <!-- ── Status Bar ─────────────────────────────────────────────────────────── -->
+  <key>UIStatusBarStyle</key>
+  <string>UIStatusBarStyleLightContent</string>
+  <key>UIViewControllerBasedStatusBarAppearance</key>
+  <false/>
+
+  <!-- ── Background Modes ───────────────────────────────────────────────────── -->
+  <!--
+    "audio" keeps the app alive in background so the polling timer
+    continues to refresh metadata when the screen is locked.
+    We NEVER set AVAudioSession.Category — this is not a player.
+  -->
+  <key>UIBackgroundModes</key>
+  <array>
+    <string>audio</string>
+  </array>
+
+  <!-- ── Privacy Strings (required for App Store / TestFlight) ─────────────── -->
+  <!--
+    Displayed when iOS prompts the user the first time the app accesses
+    music/media services. Required for MPMusicPlayerController usage.
+  -->
+  <key>NSAppleMusicUsageDescription</key>
+  <string>Sedo Bridge reads the system Now Playing session to display the current track and send media commands (play, pause, skip). It does not play audio itself.</string>
+
+  <!-- ── Flutter-specific ───────────────────────────────────────────────────── -->
+  <key>CADisableMinimumFrameDurationOnPhone</key>
+  <true/>
+
+  <key>UIApplicationSupportsIndirectInputEvents</key>
+  <true/>
+</dict>
+</plist>

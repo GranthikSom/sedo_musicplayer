@@ -1,0 +1,30 @@
+name: sedo_music_bridge
+description: >
+  Sedo Music Bridge — a lightweight system-wide media controller.
+  Controls whatever app owns the active iOS audio session.
+  Does NOT play audio itself.
+version: 1.0.0+1
+
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.10.0'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+# Intentionally minimal — no audio plugins, no media player plugins.
+# All media control is handled by native Swift via MethodChannel.
+dependencies:
+  flutter:
+    sdk: flutter
+  # No third-party packages required — pure Flutter + platform channel.
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
