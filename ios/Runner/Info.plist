@@ -74,9 +74,6 @@
   <key>UIMainStoryboardFile</key>
   <string>Main</string>
 
-  <key>NSPrincipalClass</key>
-  <string>FlutterApplication</string>
-
   <!-- ── Status Bar ─────────────────────────────────────────────────────────── -->
   <key>UIStatusBarStyle</key>
   <string>UIStatusBarStyleLightContent</string>

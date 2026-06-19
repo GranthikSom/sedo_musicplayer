@@ -109,8 +109,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
 
   Future<void> _handlePlayPause() async {
     HapticFeedback.mediumImpact();
-    await _controller.playPause();
-    // Optimistically toggle UI, then re-sync.
+    await _controller.playPause(isCurrentlyPlaying: _isPlaying);
     setState(() => _isPlaying = !_isPlaying);
     await Future.delayed(const Duration(milliseconds: 300));
     await _fetchNowPlaying();
@@ -249,25 +248,24 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
   }
 
   Widget _buildContent(Size size) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        // ── Album art placeholder ──────────────────────────────────────────
-        _AlbumArtPlaceholder(isPlaying: _isPlaying, size: size.width * 0.58),
-        const SizedBox(height: 40),
-
-        // ── Track metadata ─────────────────────────────────────────────────
-        _TrackMetadata(title: _title, artist: _artist),
-        const SizedBox(height: 52),
-
-        // ── Playback controls ──────────────────────────────────────────────
-        _PlaybackControls(
-          isPlaying: _isPlaying,
-          onPrevious: _handlePrevious,
-          onPlayPause: _handlePlayPause,
-          onNext: _handleNext,
-        ),
-      ],
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(height: 20),
+          _AlbumArtPlaceholder(isPlaying: _isPlaying, size: size.width * 0.58),
+          const SizedBox(height: 32),
+          _TrackMetadata(title: _title, artist: _artist),
+          const SizedBox(height: 40),
+          _PlaybackControls(
+            isPlaying: _isPlaying,
+            onPrevious: _handlePrevious,
+            onPlayPause: _handlePlayPause,
+            onNext: _handleNext,
+          ),
+          SizedBox(height: 20),
+        ],
+      ),
     );
   }
 
@@ -531,7 +529,7 @@ class _PlayPauseButtonState extends State<_PlayPauseButton> {
             duration: const Duration(milliseconds: 200),
             child: Icon(
               widget.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              key: ValueKey(widget.isPlaying),
+              key: ValueKey('play_${widget.isPlaying}'),
               size: 38,
               color: const Color(0xFF000000),
             ),

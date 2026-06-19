@@ -6,10 +6,10 @@ class MediaController {
   static const MethodChannel _channel = MethodChannel('music/bridge');
 
   /// Toggles system play/pause for the active audio session.
-  /// Does NOT start any audio — only sends the command to the OS.
-  Future<void> playPause() async {
+  /// [isCurrentlyPlaying] tells the native side whether to send play or pause.
+  Future<void> playPause({required bool isCurrentlyPlaying}) async {
     try {
-      await _channel.invokeMethod('playPause');
+      await _channel.invokeMethod('playPause', isCurrentlyPlaying);
     } on PlatformException catch (e) {
       _log('playPause failed: ${e.message}');
     } on MissingPluginException catch (e) {
