@@ -81,6 +81,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
+    // Listen for native now-playing change events
+    _controller.setOnNowPlayingChanged(_fetchNowPlaying);
+
     // Initial fetch, then poll every 2.5 seconds.
     _fetchNowPlaying();
     _pollTimer = Timer.periodic(

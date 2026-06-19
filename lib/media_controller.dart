@@ -1,9 +1,19 @@
+import 'dart:async';
 import 'package:flutter/services.dart';
 
 /// Dart service that bridges Flutter UI to native iOS media controls
 /// via a MethodChannel. Wraps all system media commands and metadata fetching.
 class MediaController {
   static const MethodChannel _channel = MethodChannel('music/bridge');
+
+  /// Registers a callback invoked when the native side detects a
+  /// now-playing metadata change (e.g. track skip). [onChanged] should
+  /// trigger a fresh call to [nowPlaying].
+  void setOnNowPlayingChanged(void Function() onChanged) {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'nowPlayingChanged') onChanged();
+    });
+  }
 
   /// Toggles system play/pause for the active audio session.
   Future<void> playPause() async {

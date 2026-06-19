@@ -2,79 +2,73 @@ import UIKit
 import Flutter
 import MediaPlayer
 
+// ── MediaRemote private API via dlsym ─────────────────────────────────────
+
 private let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
+
+private typealias MRMediaRemoteSendCommandType =
+    @convention(c) (Int, NSDictionary?) -> Void
+private typealias MRMediaRemoteGetNowPlayingInfoType =
+    @convention(c) (DispatchQueue, @escaping @convention(block) (NSDictionary?) -> Void) -> Void
+private typealias MRMediaRemoteRegisterForNowPlayingNotificationsType =
+    @convention(c) (DispatchQueue) -> Void
+private typealias MRMediaRemoteGetNowPlayingAppDisplayNameType =
+    @convention(c) (DispatchQueue, @escaping @convention(block) (NSString?) -> Void) -> Void
+
+private let _mrSend: MRMediaRemoteSendCommandType? = {
+    let sym = dlsym(RTLD_DEFAULT, "MRMediaRemoteSendCommand")
+    if sym == nil { NSLog("[Sedo] dlsym MRMediaRemoteSendCommand → nil"); return nil }
+    NSLog("[Sedo] dlsym MRMediaRemoteSendCommand → OK")
+    return unsafeBitCast(sym, to: MRMediaRemoteSendCommandType.self)
+}()
+
+private let _mrGetNowPlaying: MRMediaRemoteGetNowPlayingInfoType? = {
+    let sym = dlsym(RTLD_DEFAULT, "MRMediaRemoteGetNowPlayingInfo")
+    if sym == nil { NSLog("[Sedo] dlsym MRMediaRemoteGetNowPlayingInfo → nil"); return nil }
+    NSLog("[Sedo] dlsym MRMediaRemoteGetNowPlayingInfo → OK")
+    return unsafeBitCast(sym, to: MRMediaRemoteGetNowPlayingInfoType.self)
+}()
+
+private let _mrRegister: MRMediaRemoteRegisterForNowPlayingNotificationsType? = {
+    let sym = dlsym(RTLD_DEFAULT, "MRMediaRemoteRegisterForNowPlayingNotifications")
+    if sym == nil { NSLog("[Sedo] dlsym MRMediaRemoteRegister… → nil"); return nil }
+    NSLog("[Sedo] dlsym MRMediaRemoteRegisterForNowPlayingNotifications → OK")
+    return unsafeBitCast(sym, to: MRMediaRemoteRegisterForNowPlayingNotificationsType.self)
+}()
+
+private let _mrGetAppDisplayName: MRMediaRemoteGetNowPlayingAppDisplayNameType? = {
+    let sym = dlsym(RTLD_DEFAULT, "MRMediaRemoteGetNowPlayingApplicationDisplayName")
+    if sym == nil { NSLog("[Sedo] dlsym MRMediaRemoteGet…DisplayName → nil"); return nil }
+    NSLog("[Sedo] dlsym MRMediaRemoteGetNowPlayingApplicationDisplayName → OK")
+    return unsafeBitCast(sym, to: MRMediaRemoteGetNowPlayingAppDisplayNameType.self)
+}()
+
+// ── App Delegate ───────────────────────────────────────────────────────────
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
 
     private let channelName = "music/bridge"
-
-    // ── Private MediaRemote API (loaded via dlsym) ──────────────────────────
-
-    private typealias MRMediaRemoteSendCommandFn =
-        @convention(c) (Int, CFDictionary?) -> Void
-    private typealias MRMediaRemoteSendCommandWithResultFn =
-        @convention(c) (Int, CFDictionary?, (@convention(block) (UInt32) -> Void)?) -> Void
-    private typealias MRMediaRemoteGetNowPlayingInfoFn =
-        @convention(c) (DispatchQueue, @escaping (CFDictionary?) -> Void) -> Void
-    private typealias MRMediaRemoteGetNowPlayingApplicationDisplayIDFn =
-        @convention(c) () -> CFString?
-
-    private struct MediaRemote {
-        let send: MRMediaRemoteSendCommandFn
-        let sendWithResult: MRMediaRemoteSendCommandWithResultFn
-        let getNowPlaying: MRMediaRemoteGetNowPlayingInfoFn
-        let getAppDisplayID: MRMediaRemoteGetNowPlayingApplicationDisplayIDFn
-    }
-
-    private lazy var mr: MediaRemote? = {
-        // Try RTLD_DEFAULT first — MediaRemote is loaded into every process
-        let find: (String) -> UnsafeMutableRawPointer? = { name in
-            if let s = dlsym(RTLD_DEFAULT, name) { return s }
-            let path = "/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote"
-            if let h = dlopen(path, RTLD_NOW | RTLD_NOLOAD), let s = dlsym(h, name) { return s }
-            if let h = dlopen(path, RTLD_NOW),           let s = dlsym(h, name) { return s }
-            return nil
-        }
-        guard
-            let s = find("MRMediaRemoteSendCommand"),
-            let r = find("MRMediaRemoteSendCommandWithResult"),
-            let g = find("MRMediaRemoteGetNowPlayingInfo"),
-            let a = find("MRMediaRemoteGetNowPlayingApplicationDisplayID")
-        else {
-            NSLog("[Sedo] FAILED to load MediaRemote symbols:")
-            if dlsym(RTLD_DEFAULT, "MRMediaRemoteSendCommand") == nil { NSLog("[Sedo]   MRMediaRemoteSendCommand — MISSING") }
-            if dlsym(RTLD_DEFAULT, "MRMediaRemoteSendCommandWithResult") == nil { NSLog("[Sedo]   MRMediaRemoteSendCommandWithResult — MISSING") }
-            if dlsym(RTLD_DEFAULT, "MRMediaRemoteGetNowPlayingInfo") == nil { NSLog("[Sedo]   MRMediaRemoteGetNowPlayingInfo — MISSING") }
-            if dlsym(RTLD_DEFAULT, "MRMediaRemoteGetNowPlayingApplicationDisplayID") == nil { NSLog("[Sedo]   MRMediaRemoteGetNowPlayingApplicationDisplayID — MISSING") }
-            return nil
-        }
-        NSLog("[Sedo] MediaRemote APIs loaded via RTLD_DEFAULT")
-        return MediaRemote(
-            send:           unsafeBitCast(s, to: MRMediaRemoteSendCommandFn.self),
-            sendWithResult: unsafeBitCast(r, to: MRMediaRemoteSendCommandWithResultFn.self),
-            getNowPlaying:  unsafeBitCast(g, to: MRMediaRemoteGetNowPlayingInfoFn.self),
-            getAppDisplayID: unsafeBitCast(a, to: MRMediaRemoteGetNowPlayingApplicationDisplayIDFn.self)
-        )
-    }()
-
-    // ── App Launch ──────────────────────────────────────────────────────────
+    private var channel: FlutterMethodChannel?
 
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
 
+        application.beginReceivingRemoteControlEvents()
+
         guard let controller = window?.rootViewController as? FlutterViewController else {
             fatalError("[Sedo] rootViewController is not FlutterViewController")
         }
 
-        let channel = FlutterMethodChannel(
+        let chan = FlutterMethodChannel(
             name: channelName,
             binaryMessenger: controller.binaryMessenger
         )
+        channel = chan
 
-        channel.setMethodCallHandler { [weak self] (call, result) in
+        chan.setMethodCallHandler { [weak self] (call, result) in
             guard let self = self else { return }
             switch call.method {
             case "playPause":  self.handlePlayPause(result: result)
@@ -85,122 +79,104 @@ private let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
             }
         }
 
+        // Register for now-playing notifications (may be a prerequisite for queries)
+        if let register = _mrRegister {
+            register(DispatchQueue.main)
+            NSLog("[Sedo] Registered for now-playing notifications")
+        }
+
+        // Observe now-playing changes and notify Dart
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(nowPlayingDidChange),
+            name: NSNotification.Name("MRMediaRemoteNowPlayingInfoDidChangeNotification"),
+            object: nil
+        )
+
         GeneratedPluginRegistrant.register(with: self)
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
+
+    @objc private func nowPlayingDidChange() {
+        // Tell Dart to re-fetch now-playing data
+        channel?.invokeMethod("nowPlayingChanged", arguments: nil)
     }
 
     // ── Playback Controls ───────────────────────────────────────────────────
 
     private func handlePlayPause(result: @escaping FlutterResult) {
-        guard let mr = mr else {
-            NSLog("[Sedo] playPause — mr is nil, using fallback")
-            fallbackPlayPause()
-            result(nil)
-            return
-        }
-        // Send toggle + play + pause (+ sendWithResult for status)
-        mr.sendWithResult(2, nil) { s in
-            NSLog("[Sedo] togglePlayPause → status=\(s)")
-        }
-        mr.send(0, nil)
-        mr.send(1, nil)
+        if let send = _mrSend { send(2, nil) }
         result(nil)
     }
 
     private func handleNext(result: @escaping FlutterResult) {
-        guard let mr = mr else { NSLog("[Sedo] next — mr nil"); result(nil); return }
-        mr.sendWithResult(4, nil) { s in NSLog("[Sedo] nextTrack → status=\(s)") }
+        if let send = _mrSend { send(4, nil) }
         result(nil)
     }
 
     private func handlePrevious(result: @escaping FlutterResult) {
-        guard let mr = mr else { NSLog("[Sedo] prev — mr nil"); result(nil); return }
-        mr.sendWithResult(5, nil) { s in NSLog("[Sedo] prevTrack → status=\(s)") }
+        if let send = _mrSend { send(5, nil) }
         result(nil)
-    }
-
-    private func fallbackPlayPause() {
-        let p = MPMusicPlayerController.systemMusicPlayer
-        if #available(iOS 16, *) {
-            switch p.playbackState {
-            case .playing: p.pause()
-            default:       p.play()
-            }
-        }
     }
 
     // ── Now Playing Metadata ───────────────────────────────────────────────
 
     private func handleNowPlaying(result: @escaping FlutterResult) {
-        guard let mr = mr else {
-            NSLog("[Sedo] nowPlaying — mr is nil, using fallback")
-            fallbackNP(result: result)
-            return
+        // Try getting the now-playing app display name first (diagnostic)
+        let bgQueue = DispatchQueue(label: "sedo.nowplaying", qos: .userInitiated)
+        if let nameFn = _mrGetAppDisplayName {
+            nameFn(bgQueue) { appName in
+                if let name = appName as String? {
+                    NSLog("[Sedo] Now-playing app: \(name)")
+                } else {
+                    NSLog("[Sedo] Now-playing app: (nil)")
+                }
+            }
         }
 
-        // Log which app the system thinks is the now-playing app
-        let appID = mr.getAppDisplayID()
-        NSLog("[Sedo] NowPlaying app: \(appID ?? "nil" as CFString)")
-
-        // Fetch system-wide now playing info via private API
-        mr.getNowPlaying(DispatchQueue.main) { [weak self] cf in
-            guard let self = self else { return }
-
-            guard let dict = cf as? [String: Any] else {
-                NSLog("[Sedo] MRMediaRemoteGetNowPlayingInfo returned nil/empty")
-                self.fallbackNP(result: result)
-                return
-            }
-
-            let nd = dict as NSDictionary
-            if !self.didLogNPKeys {
-                NSLog("[Sedo] --- NowPlaying dictionary has \(nd.allKeys.count) keys ---")
-                for k in nd.allKeys {
-                    NSLog("[Sedo]   NP key: \(k) = \(nd[k] ?? "nil")")
-                }
-                self.didLogNPKeys = true
-            }
-
-            let title  = self.scanNP(nd, ["title","Title","kMRMediaRemoteNowPlayingInfoTitle"])
-                      ?? self.str(dict[MPMediaItemPropertyTitle]) ?? "Unknown"
-            let artist = self.scanNP(nd, ["artist","Artist","kMRMediaRemoteNowPlayingInfoArtist"])
-                      ?? self.str(dict[MPMediaItemPropertyArtist]) ?? "Unknown"
-
-            NSLog("[Sedo] NP result: '\(title)' – '\(artist)'")
+        // Fallback: MPNowPlayingInfoCenter
+        let fallback = {
+            let info = MPNowPlayingInfoCenter.default().nowPlayingInfo
+            let title  = info?[MPMediaItemPropertyTitle]  as? String ?? "Unknown"
+            let artist = info?[MPMediaItemPropertyArtist] as? String ?? "Unknown"
+            NSLog("[Sedo] fallback → title='\(title)' artist='\(artist)'")
             result(["title": title, "artist": artist])
         }
+
+        // Try MRMediaRemote on a background queue with a small initial delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.tryFetchNowPlaying(queue: bgQueue, attempt: 1, result: result, fallback: fallback)
+        }
     }
 
-    private var didLogNPKeys = false
+    private func tryFetchNowPlaying(queue: DispatchQueue, attempt: Int, result: @escaping FlutterResult, fallback: @escaping () -> Void) {
+        guard let get = _mrGetNowPlaying else { fallback(); return }
 
-    private func scanNP(_ d: NSDictionary, _ keys: [String]) -> String? {
-        for k in keys {
-            if let v = d[k] as? String, !v.isEmpty { return v }
-        }
-        for k in d.allKeys {
-            guard let ks = k as? String else { continue }
-            for s in keys {
-                if ks.lowercased().contains(s.lowercased()) {
-                    return d[k] as? String
+        get(queue) { dict in
+            if let dict = dict {
+                let ns = dict as NSDictionary
+                let title  = (ns["kMRMediaRemoteNowPlayingInfoTitle"] as? String)
+                          ?? (ns[MPMediaItemPropertyTitle] as? String)
+                          ?? "Unknown"
+                let artist = (ns["kMRMediaRemoteNowPlayingInfoArtist"] as? String)
+                          ?? (ns[MPMediaItemPropertyArtist] as? String)
+                          ?? "Unknown"
+                let artwork = ns["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data
+                var resultMap: [String: String] = ["title": title, "artist": artist]
+                if let data = artwork {
+                    resultMap["artwork"] = data.base64EncodedString()
                 }
+                NSLog("[Sedo] MRMediaRemote → title='\(title)' artist='\(artist)'")
+                result(resultMap)
+            } else if attempt < 2 {
+                NSLog("[Sedo] MRMediaRemote → nil (attempt \(attempt)/2), retrying in 1s…")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self.tryFetchNowPlaying(queue: queue, attempt: attempt + 1, result: result, fallback: fallback)
+                }
+            } else {
+                NSLog("[Sedo] MRMediaRemote → nil after \(attempt) attempts")
+                fallback()
             }
-        }
-        return nil
-    }
-
-    private func str(_ v: Any?) -> String? {
-        (v as? String).flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    private func fallbackNP(result: @escaping FlutterResult) {
-        if let item = MPMusicPlayerController.systemMusicPlayer.nowPlayingItem {
-            result(["title": item.title ?? "Unknown", "artist": item.artist ?? "Unknown"])
-        } else {
-            let info = MPNowPlayingInfoCenter.default().nowPlayingInfo
-            result([
-                "title":  info?[MPMediaItemPropertyTitle]  as? String ?? "Unknown",
-                "artist": info?[MPMediaItemPropertyArtist] as? String ?? "Unknown",
-            ])
         }
     }
 }

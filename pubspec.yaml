@@ -11,11 +11,7 @@ environment:
   sdk: '>=3.0.0 <4.0.0'
   flutter: '>=3.10.0'
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Dependencies
-# ─────────────────────────────────────────────────────────────────────────────
-# Intentionally minimal — no audio plugins, no media player plugins.
-# All media control is handled by native Swift via MethodChannel.
+
 dependencies:
   flutter:
     sdk: flutter
